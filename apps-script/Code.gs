@@ -6,7 +6,9 @@
  *                연습 횟수·정답률·마지막 연습·자주 틀린 단어·최근 연습 30회
  *  - '지난 기록' 시트: 예전 방식(연습 한 번에 한 줄)으로 쌓였던 기록. 더는 늘어나지 않음
  *  - '지문' 시트: 선생님이 등록한 지문 목록(교과서, 모의고사 1번 …)과 그 단어
- *  - '모둠', '레이스', '레이스 기록' 시트: 반·모둠 목록, 모둠 레이스 설정과 기록
+ *  - '모둠', '레이스', '레이스 기록' 시트: 반·모둠 목록, 레이스(모둠·개인, 단어·Quiz) 설정과 기록
+ *  - '공지' 시트: 선생님이 학생 첫 화면에 띄우는 공지사항
+ *  - '선생님 학습 데이터' 시트(숨김): 선생님이 관리자 화면의 '학생 화면'에서 모은 헷갈리는 단어·최근 점수
  *
  * 단어표 사진 인식을 쓰려면: 편집기 왼쪽 '서비스' 옆 + → Drive API → 추가 (안내서 참고)
  *
@@ -14,6 +16,8 @@
  * 실행이 끝나면 비밀번호는 안전하게 저장되므로, 여기 적은 글자는 지워도 됩니다.
  */
 const ADMIN_PASSWORD_INIT = '';
+const RANK_MIN_CLASS = 10;        // 반별 1~3위는 그 반 참가자가 이만큼 이상일 때만 보여 줌 (몇 명 안 될 때 누구인지 드러나지 않게)
+const RANK_MIN_ALL = 30;          // 전체 1~10위는 전체 참가자가 이만큼 이상일 때만 보여 줌
 
 const SHEET_STUDENTS = '학생';
 const SHEET_LOG = '기록';
@@ -21,17 +25,25 @@ const STUDENT_HEADERS = ['학번', '이름', '가입 시각', '최근 접속', '
   '연습 횟수', '푼 문제', '맞힌 문제', '정답률', '마지막 연습', '자주 틀린 단어', '최근 연습(데이터)', '틀린 단어(데이터)', '내 학습 데이터'];
 const S_COLS = STUDENT_HEADERS.length;   // 15
 const MY_COL = 15;                       // 헷갈리는 단어·페이지별 최근 점수·매칭 최고 기록 (어느 브라우저에서나 같게 보이도록)
+const ACT_COL = 17, ACT_HEADER = '활동 기록(데이터)', ACT_KEEP = 150;   // Q열: 단어 목록·카드 넘기기를 언제, 몇 장, 몇 분 했는지 (점수 없음)
+const RANK_COL = 16;                     // P열 '순위 기록(데이터)': 지문·연습별 가장 좋은 기록 (매칭은 가장 빠른 시간, 나머지는 가장 높은 정답률)
+const RANK_HEADER = '순위 기록(데이터)';
+const RANK_MODES = ['match', 'choice', 'pick', 'spell'];
 const RECENT_KEEP = 30;                  // 학생 줄에 남기는 최근 연습 수
 const WRONG_KEEP = 200;                  // 학생 줄에 남기는 틀린 단어 수
 const LOG_HEADERS = ['시각', '학번', '이름', '학습지', '연습', '점수', '문항 수', '정답률', '틀린 단어', '페이지 ID'];
 const SHEET_SETS = '지문';
-const SET_HEADERS = ['ID', '이름', '순서', '단어 수', '단어(JSON)', '만든 시각', '고친 시각'];
+const SET_HEADERS = ['ID', '이름', '순서', '단어 수', '단어(JSON)', '만든 시각', '고친 시각', '수업 카드 순서(JSON)'];   // H열: 선생님이 정한 수업용 카드 넘기기 단어 순서
 const SHEET_TEAMS = '모둠';
 const TEAM_HEADERS = ['반', '모둠', '순서'];
 const SHEET_RACES = '레이스';
-const RACE_HEADERS = ['ID', '이름', '반(JSON)', '지문(JSON)', '설정(JSON)', '상태', '만든 시각', '고친 시각'];
+const RACE_HEADERS = ['ID', '이름', '반(JSON)', '지문(JSON)', '설정(JSON)', '상태', '만든 시각', '고친 시각', '문제(JSON)'];
 const SHEET_RACELOG = '레이스 기록';
-const RACELOG_HEADERS = ['시작 시각', '레이스 ID', '레이스', '반', '모둠', '상태', '맞힌 수', '문항 수', '기록(초)', '벌점(초)', '틀린 수', '틀린 단어', '마지막 갱신'];
+const SHEET_NOTICES = '공지';
+const NOTICE_HEADERS = ['ID', '제목', '내용', '보이기', '만든 시각', '고친 시각'];
+const SHEET_TEACHER = '선생님 학습 데이터';
+const TEACHER_HEADERS = ['선생님 학습 데이터 (관리자 화면의 \'학생 화면\'에서 쓰는 헷갈리는 단어·최근 점수. 사이트가 쓰는 칸이니 고치지 마세요)'];
+const RACELOG_HEADERS = ['시작 시각', '레이스 ID', '레이스', '반', '모둠', '상태', '맞힌 수', '문항 수', '기록(초)', '벌점(초)', '틀린 수', '틀린 단어', '마지막 갱신', '답(JSON)'];   // N열: Quiz 문제마다 고른 답과 맞았는지
 const TOKEN_DAYS = 180;          // 학생 로그인 유지 기간
 const ADMIN_TOKEN_HOURS = 12;    // 관리자 로그인 유지 시간
 const MAX_FAILS = 8;             // 비밀번호를 이만큼 틀리면
@@ -46,10 +58,12 @@ function setup() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const st = ensureSheet_(ss, SHEET_STUDENTS, STUDENT_HEADERS);
   st.getRange(1, 1, 1, S_COLS).setValues([STUDENT_HEADERS]).setFontWeight('bold');   // 새 칸 머리글
-  ensureSheet_(ss, SHEET_SETS, SET_HEADERS);
+  st.getRange(1, RANK_COL).setValue(RANK_HEADER).setFontWeight('bold');
+  ensureSheet_(ss, SHEET_SETS, SET_HEADERS).getRange(1, 1, 1, SET_HEADERS.length).setValues([SET_HEADERS]).setFontWeight('bold');   // 새 칸 머리글
   ensureSheet_(ss, SHEET_TEAMS, TEAM_HEADERS);
-  ensureSheet_(ss, SHEET_RACES, RACE_HEADERS);
-  ensureSheet_(ss, SHEET_RACELOG, RACELOG_HEADERS);
+  ensureSheet_(ss, SHEET_RACES, RACE_HEADERS).getRange(1, 1, 1, RACE_HEADERS.length).setValues([RACE_HEADERS]).setFontWeight('bold');   // 새 칸 머리글
+  ensureSheet_(ss, SHEET_RACELOG, RACELOG_HEADERS).getRange(1, 1, 1, RACELOG_HEADERS.length).setValues([RACELOG_HEADERS]).setFontWeight('bold');   // 새 칸 머리글
+  ensureSheet_(ss, SHEET_NOTICES, NOTICE_HEADERS);
   const props = PropertiesService.getScriptProperties();
   if (!props.getProperty('SECRET')) props.setProperty('SECRET', Utilities.getUuid() + Utilities.getUuid());
   props.setProperty('CACHE_GEN', String(Date.now())); GEN_ = null;   // 시트를 직접 고쳤을 때: 서버가 기억해 둔 것을 모두 버림
@@ -106,6 +120,7 @@ const ACTIONS = {
   admin: admin_,
   adminStudent: adminStudent_,
   adminReset: adminReset_,
+  adminClearLog: adminClearLog_,
   sets: sets_,
   adminSetSave: adminSetSave_,
   adminSetDelete: adminSetDelete_,
@@ -114,6 +129,15 @@ const ACTIONS = {
   teams: teams_,
   teamLogin: teamLogin_,
   races: races_,
+  ranks: ranks_,
+  adminNotices: adminNotices_,
+  adminViewAs: adminViewAs_,
+  adminCardOrderSave: adminCardOrderSave_,
+  adminRegAllow: adminRegAllow_,
+  qimg: qimg_,
+  adminQImgSave: adminQImgSave_,
+  adminNoticeSave: adminNoticeSave_,
+  adminNoticeDelete: adminNoticeDelete_,
   raceStart: raceStart_,
   raceProgress: raceProgress_,
   raceFinish: raceFinish_,
@@ -130,6 +154,7 @@ const ACTIONS = {
 /* ---------------- 학생 ---------------- */
 function register_(req) {
   const sid = cleanSid_(req.sid), name = cleanName_(req.name), pw = cleanPin_(req.pw);
+  if (!regAllowed_(sid)) fail_('사용 권한이 없는 학번입니다.');
   return withLock_(() => {
     const sh = sheet_(SHEET_STUDENTS);
     const row = findStudentRow_(sh, sid);
@@ -190,6 +215,7 @@ function checkStudentPw_(sid, pw, needRow) {
 
 function login_(req) {
   const sid = cleanSid_(req.sid), pw = String(req.pw || '');
+  if (!regAllowed_(sid)) fail_('사용 권한이 없는 학번입니다.');
   const st = checkStudentPw_(sid, pw, false);
   if (!/^v2:/.test(st.salt)) {   // 예전 방식 비밀번호를 빠른 방식으로 바꿔 둠 (학생마다 한 번)
     withLock_(() => {
@@ -205,6 +231,7 @@ function login_(req) {
 /* 학생이 스스로 비밀번호 바꾸기: 지금 비밀번호를 확인하고 새 비밀번호(숫자 5자리)로 바꾼 뒤 로그인 */
 function changePw_(req) {
   const sid = cleanSid_(req.sid), pw = String(req.pw || ''), newPw = cleanPin_(req.newPw);
+  if (!regAllowed_(sid)) fail_('사용 권한이 없는 학번입니다.');
   return withLock_(() => {
     const st = checkStudentPw_(sid, pw, true);
     const s2 = newSalt_(), h2 = hashPw_(newPw, s2);
@@ -220,10 +247,21 @@ function log_(req) {
   const total = Math.max(0, Math.floor(Number(req.total) || 0));
   const wrong = (Array.isArray(req.wrong) ? req.wrong : []).slice(0, 200).map(w => String(w).slice(0, 80)).filter(Boolean);
   const when = req.at ? new Date(req.at) : new Date();
-  // 카드 넘기기처럼 점수가 없는 연습은 기록하지 않음. 함께 온 내 학습 데이터는 저장함
+  if (req.act) {   // 단어 목록·카드 넘기기: 점수·정답률에는 넣지 않고 '활동 기록'에만 남김
+    const n = Math.max(0, Math.min(1000, total));
+    const act = {at: (isNaN(when) ? new Date() : when).toISOString(), page: String(req.page || '').slice(0, 30), pageTitle: String(req.pageTitle || '').slice(0, 60),
+      mode: req.mode === '카드 넘기기' ? '카드 넘기기' : '단어 목록', seen: Math.max(0, Math.min(n, Math.floor(Number(req.seen) || 0))), total: n,
+      secs: Math.max(0, Math.min(3 * 3600, Math.floor(Number(req.secs) || 0)))};
+    addActivity_(sid, act);
+    if (!req.my) return {ok: true};
+    const o = addPractice_(sid, null, req.my);
+    return Object.assign({ok: true}, o.myPack ? {myPack: o.myPack} : {});
+  }
+  // 점수가 없는 연습은 학생 기록(정답률)에 넣지 않음. 함께 온 내 학습 데이터는 저장함
   const entry = total ? {at: (isNaN(when) ? new Date() : when).toISOString(), pageTitle: String(req.pageTitle || '').slice(0, 60), mode: String(req.mode || '').slice(0, 20),
     score: Math.min(score, total), total: total, page: String(req.page || '').slice(0, 30), wrong: wrong} : null;
   if (!entry && !req.my) return {ok: true};
+  if (entry && RANK_MODES.indexOf(req.rank) >= 0 && entry.page) entry.rank = {mode: req.rank, secs: Math.round(Number(req.secs) * 10) / 10};
   const out = addPractice_(sid, entry, req.my);
   // 학생 화면이 '내 기록'과 '내 학습 데이터'를 바로 새로 고칠 수 있게 함께 보냄
   return Object.assign({ok: true}, out.me ? {me: out.me} : {}, out.myPack ? {myPack: out.myPack} : {});
@@ -299,6 +337,7 @@ function myPack_(sid, my) {
   return {my: my, v: v};
 }
 function mySync_(req) {
+  if (String(req.token || '').split('.')[0] === 'a') return teacherMySync_(req);
   const sid = checkToken_(req.token, 's');
   if (!req.my) {   // 가져가기만: 서버가 기억해 둔 것이 있으면 시트를 열지 않음
     const c = CacheService.getScriptCache().get(gk_('my_' + sid));
@@ -313,6 +352,109 @@ function mySync_(req) {
     if (!req.my && req.v === pack.v) return {ok: true, same: true, v: pack.v};
     return Object.assign({ok: true}, pack);
   });
+}
+
+/* 관리자 화면의 '학생 화면': 선생님의 헷갈리는 단어·최근 점수는 숨긴 '선생님 학습 데이터' 시트 A2 칸에 학생과 같은 방식으로 저장 */
+function teacherSheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sh = ss.getSheetByName(SHEET_TEACHER);
+  if (!sh) { sh = ensureSheet_(ss, SHEET_TEACHER, TEACHER_HEADERS); try { sh.hideSheet(); } catch (e) {} }
+  return sh;
+}
+function teacherMySync_(req) {
+  checkToken_(req.token, 'a');
+  const key = '#teacher';
+  if (!req.my) {
+    const c = CacheService.getScriptCache().get(gk_('my_' + key));
+    if (c) { const o = JSON.parse(c); return o.v === req.v ? {ok: true, same: true, v: o.v} : {ok: true, my: o.my, v: o.v}; }
+  }
+  return withLock_(() => {
+    const sh = teacherSheet_(), cell = sh.getRange(2, 1);
+    const mm = myMerge_(cell.getValue(), req.my);
+    if (mm.changed) cell.setValue(JSON.stringify(mm.my));
+    const pack = myPack_(key, mm.my);
+    if (!req.my && req.v === pack.v) return {ok: true, same: true, v: pack.v};
+    return Object.assign({ok: true}, pack);
+  });
+}
+
+/* ---------------- 순위 ----------------
+   지문 전체로 한 연습만 순위에 들어감. 학생마다 P열에 {"지문ID|연습": 가장 좋은 기록}을 둠
+   - 매칭 게임: 가장 빠른 시간 {t, n(짝 수)} · 키에 짝 수를 붙임 ("s1a2b3c4|match8")
+   - 뜻 고르기·단어 고르기·철자 쓰기: 가장 높은 정답률 {s, n} */
+const rankBetter_ = (mode, a, b) => mode === 'match' ? a.t < b.t : a.s * b.n > b.s * a.n;   // a가 b보다 좋은가
+const rankSame_ = (mode, a, b) => mode === 'match' ? a.t === b.t : a.s * b.n === b.s * a.n;
+function rankUpdate_(sh, row, entry) {
+  const m = entry.rank.mode, isMatch = m === 'match';
+  if (isMatch && !(entry.rank.secs > 0)) return;
+  const key = entry.page + '|' + m + (isMatch ? entry.total : '');
+  const data = parseJ_(sh.getRange(row, RANK_COL).getValue(), {});
+  const v = isMatch ? {t: entry.rank.secs, n: entry.total, at: entry.at} : {s: entry.score, n: entry.total, at: entry.at};
+  const cur = data[key];
+  if (cur && !(isMatch ? rankBetter_(m, v, cur) : (cur.n !== v.n || rankBetter_(m, v, cur)))) return;   // 단어 수가 바뀐 지문은 새 기록으로 바꿈
+  data[key] = v;
+  sh.getRange(row, RANK_COL).setValue(JSON.stringify(data));
+  if (sh.getRange(1, RANK_COL).getValue() !== RANK_HEADER) sh.getRange(1, RANK_COL).setValue(RANK_HEADER).setFontWeight('bold');
+  forget_('c_rank_' + entry.page);
+}
+/* 한 지문의 기록: 모든 학생의 P열에서 그 지문 것만 모음 (서버가 잠깐 기억해 둠) */
+function rankRows_(page) {
+  return cached_('c_rank_' + page, () => {
+    const sh = sheet_(SHEET_STUDENTS), n = sh.getLastRow(); if (n < 2) return [];
+    const names = sh.getRange(2, 1, n - 1, 2).getValues(), cells = sh.getRange(2, RANK_COL, n - 1, 1).getValues(), out = [];
+    names.forEach((r, i) => {
+      const sid = String(r[0]).trim(); if (!sid || isTestSid_(sid) || !cells[i][0]) return;   // 시험용 학번은 순위에 넣지 않음
+      const data = parseJ_(cells[i][0], {}), mine = {};
+      Object.keys(data).forEach(k => { const j = k.indexOf('|'); if (k.slice(0, j) === page) mine[k.slice(j + 1)] = data[k]; });
+      if (Object.keys(mine).length) out.push({sid: sid, name: String(r[1]), cls: sidClass_(sid), r: mine});
+    });
+    return out;
+  });
+}
+/* 등수 매기기: 같은 기록은 같은 등수(1, 1, 3 …). limit 등까지 모두 보여 주므로 동점자는 다 들어감 */
+/* 다른 반 학생 이름은 가운데를 ○로 가림: 김민준 → 김○준, 이수 → 이○, 남궁민수 → 남○○수 */
+function maskName_(name) {
+  const c = Array.from(String(name || '').trim());
+  if (c.length <= 1) return c.join('');
+  if (c.length === 2) return c[0] + '○';
+  return c[0] + '○'.repeat(c.length - 2) + c[c.length - 1];
+}
+function rankList_(rows, mode, key, limit, mySid, myCls, minCount) {
+  const list = rows.filter(x => x.r[key]).map(x => ({sid: x.sid, name: x.name, cls: x.cls, v: x.r[key]}));
+  list.sort((a, b) => rankBetter_(mode, a.v, b.v) ? -1 : rankBetter_(mode, b.v, a.v) ? 1 : 0);
+  let rank = 0;
+  list.forEach((x, i) => { if (i === 0 || !rankSame_(mode, x.v, list[i - 1].v)) rank = i + 1; x.rank = rank; });
+  const me = list.find(x => x.sid === mySid);
+  const show = x => ({rank: x.rank, name: x.cls === myCls ? x.name : maskName_(x.name), cls: x.cls, t: x.v.t, s: x.v.s, n: x.v.n, me: x.sid === mySid});
+  const enough = list.length >= minCount;   // 참가자가 적으면 순위표는 보내지 않고 내 순위만 보냄
+  return {top: enough ? list.filter(x => x.rank <= limit).map(show) : [], hidden: !enough, need: minCount, count: list.length, mine: me ? show(me) : null};
+}
+function ranks_(req) {
+  const page = String(req.page || '').slice(0, 30);
+  if (!page) fail_('지문을 골라 주세요.');
+  let cls = '', sid = '';
+  if (String(req.token || '').split('.')[0] === 'a') { checkToken_(req.token, 'a'); cls = String(req.cls || '').slice(0, 40); if (req.sid) { const v = viewStudent_(req.sid); sid = v.sid; cls = v.cls; } }   // 관리자 화면의 '학생 화면 관리'
+  else { sid = checkToken_(req.token, 's'); cls = sidClass_(sid); }
+  const rows = rankRows_(page), out = {};
+  const pairs = Math.max(1, Math.min(8, Math.floor(Number(req.pairs) || 8)));
+  RANK_MODES.forEach(m => {
+    const key = m === 'match' ? 'match' + pairs : m;
+    out[m] = {all: rankList_(rows, m, key, 10, sid, cls, RANK_MIN_ALL), cls: cls ? rankList_(rows.filter(x => x.cls === cls), m, key, 3, sid, cls, RANK_MIN_CLASS) : null};
+  });
+  return {ok: true, page: page, cls: cls, ranks: out};
+}
+
+/* 반별 화면에서 학생 한 명의 화면 보기: 그 학생의 이름·반과 내 학습 데이터(헷갈리는 단어·최근 점수·매칭 기록)를 읽기만 함 */
+function viewStudent_(sidIn) {
+  const sid = cleanSid_(sidIn), c = stuCacheGet_(sid), name = c ? c.name : (stuFromSheet_(sid) || {}).name;
+  if (name === undefined) fail_('그 학생을 찾을 수 없어요.');
+  return {sid: sid, name: String(name), cls: sidClass_(sid)};
+}
+function adminViewAs_(req) {
+  checkToken_(req.token, 'a');
+  const v = viewStudent_(req.sid), sh = sheet_(SHEET_STUDENTS), row = findStudentRow_(sh, v.sid);
+  const my = row ? cleanMy_(parseJ_(sh.getRange(row, MY_COL).getValue(), {})) : cleanMy_({});
+  return {ok: true, student: v, my: my};
 }
 
 /* ---------------- 관리자 ---------------- */
@@ -333,12 +475,14 @@ function adminLogin_(req) {
 function admin_(req) {
   checkToken_(req.token, 'a');
   const sh = sheet_(SHEET_STUDENTS), n = sh.getLastRow();
-  const rows = n < 2 ? [] : sh.getRange(2, 1, n - 1, S_COLS).getValues().filter(r => String(r[0]).trim());
+  const rows = n < 2 ? [] : sh.getRange(2, 1, n - 1, ACT_COL).getValues().filter(r => String(r[0]).trim());   // Q열 활동 기록까지
   const students = [], recent = [], wrongCount = {};
   rows.forEach(r => {
     const sid = String(r[0]).trim(), name = String(r[1]), st = rowStats_(r);
     students.push({sid: sid, name: name, joined: iso_(r[2]), lastSeen: iso_(r[3]), hasPw: !!r[5], sessions: st.sessions, questions: st.questions, correct: st.correct, lastPractice: st.last});
     st.recent.forEach(e => recent.push(Object.assign({sid: sid, name: name}, e)));
+    const acts = parseJ_(r[ACT_COL - 1], []);   // 단어 목록·카드 넘기기 (점수 없음)
+    if (Array.isArray(acts)) acts.slice(-30).forEach(a => recent.push(Object.assign({sid: sid, name: name, act: 1, score: 0}, a)));
     st.wrong.forEach(w => { const k = w.page + '|' + w.en; const o = wrongCount[k] || (wrongCount[k] = {en: w.en, page: w.page, count: 0, students: 0}); o.count += w.count; o.students++; });
   });
   recent.sort((a, b) => a.at < b.at ? 1 : -1);
@@ -348,8 +492,46 @@ function admin_(req) {
     students: students.sort((a, b) => String(a.sid).localeCompare(String(b.sid))),
     recent: recent.slice(0, 300),
     wrongTop: Object.keys(wrongCount).map(k => wrongCount[k]).sort((a, b) => b.count - a.count).slice(0, 50),
-    archive: archiveInfo_()
+    archive: archiveInfo_(),
+    regAllow: PropertiesService.getScriptProperties().getProperty('REG_ALLOW') || '',
+    regTest: PropertiesService.getScriptProperties().getProperty('TEST_SIDS') || ''
   };
+}
+
+/* 사용할 수 있는 학번: 선생님 메뉴 → 학생 기록에서 정함 (예: 20101~20126, 20201~20226).
+   적어 두면 그 학번만 처음 등록·로그인·이용이 됨 (이미 로그인해 있던 다른 학번도 다음 요청에서 로그아웃). 비어 있으면 누구나 */
+function regRules_(text) {
+  return String(text || '').replace(/[～〜]/g, '~').replace(/\s*~\s*/g, '~').split(/[\s,]+/).filter(Boolean).map(x => {
+    const m = x.split('~');
+    if (m.length > 2 || m.some(v => !/^[0-9A-Za-z-]{2,20}$/.test(v))) fail_(`"${x.slice(0, 30)}"을(를) 알아볼 수 없어요. 20101~20126처럼 써 주세요.`);
+    return m.length === 2 ? [m[0], m[1]] : [m[0], m[0]];
+  });
+}
+/* 학번이 목록(예: '20101~20126, 21201')에 들어 있는지 */
+function sidInRules_(sid, text) {
+  let rules = []; try { rules = regRules_(text); } catch (e) { return false; }
+  return rules.some(r => sid === r[0] || sid === r[1] ||
+    (/^[0-9]+$/.test(r[0] + r[1] + sid) && sid.length === r[0].length && r[0].length === r[1].length && Number(sid) >= Math.min(+r[0], +r[1]) && Number(sid) <= Math.max(+r[0], +r[1])));
+}
+/* 시험용 학번: 선생님 메뉴에서 정함. 순위에 나오지 않고, 사용할 수 있는 학번 목록에 없어도 늘 쓸 수 있음 */
+function isTestSid_(sid) {
+  return sidInRules_(sid, PropertiesService.getScriptProperties().getProperty('TEST_SIDS') || '');
+}
+function regAllowed_(sid) {
+  const text = PropertiesService.getScriptProperties().getProperty('REG_ALLOW');
+  if (!text || isTestSid_(sid)) return true;
+  return sidInRules_(sid, text);
+}
+function adminRegAllow_(req) {
+  checkToken_(req.token, 'a');
+  const props = PropertiesService.getScriptProperties();
+  const norm = t => { const x = regRules_(t).map(r => r[0] === r[1] ? r[0] : r[0] + '~' + r[1]).join(', '); if (x.length > 4000) fail_('너무 길어요. 범위(~)로 묶어서 써 주세요.'); return x; };
+  const text = req.text !== undefined ? norm(req.text) : null, t = req.test !== undefined ? norm(req.test) : null;   // 둘 다 확인한 뒤 저장
+  if (text !== null) props.setProperty('REG_ALLOW', text);   // 빈 값: 누구나 등록
+  if (t !== null) {
+    if (t !== (props.getProperty('TEST_SIDS') || '')) { props.setProperty('TEST_SIDS', t); props.setProperty('CACHE_GEN', String(Date.now())); GEN_ = null; }   // 순위를 새로 계산하게 함
+  }
+  return {ok: true, text: props.getProperty('REG_ALLOW') || '', test: props.getProperty('TEST_SIDS') || ''};
 }
 
 function adminStudent_(req) {
@@ -371,6 +553,25 @@ function adminReset_(req) {
   });
 }
 
+/* 한 학생의 연습 기록 지우기: 연습 횟수·정답률·최근 연습·자주 틀리는 단어(G~N열), 순위 기록(P열), 활동 기록(Q열).
+   학번·이름·비밀번호, 헷갈리는 단어(O열), 레이스 기록은 그대로 둠 */
+function adminClearLog_(req) {
+  checkToken_(req.token, 'a');
+  const sid = cleanSid_(req.sid);
+  return withLock_(() => {
+    const sh = sheet_(SHEET_STUDENTS), row = findStudentRow_(sh, sid);
+    if (!row) fail_('그 학번의 학생이 없어요.');
+    sh.getRange(row, 7, 1, 8).setValues([statsCells_({sessions: 0, questions: 0, correct: 0, last: '', recent: [], wrong: []})]);   // G~N열
+    const ranks = parseJ_(sh.getRange(row, RANK_COL).getValue(), {}), pages = {};
+    Object.keys(ranks || {}).forEach(k => { pages[k.split('|')[0]] = 1; });
+    sh.getRange(row, RANK_COL).setValue('');
+    try { sh.getRange(row, ACT_COL).setValue(''); } catch (e) {}
+    Object.keys(pages).forEach(pg => forget_('c_rank_' + pg));   // 그 학생이 있던 순위표를 새로 계산
+    try { CacheService.getScriptCache().remove(gk_('me_' + sid)); } catch (e) {}   // 학생 화면 '내 기록'도 새로
+    return {ok: true};
+  });
+}
+
 /* ---------------- 통계 ---------------- */
 function statsFor_(sid) {
   const sh = sheet_(SHEET_STUDENTS), row = findStudentRow_(sh, sid);
@@ -380,7 +581,8 @@ function statsFor_(sid) {
     student: {sid: sid, name: String(r[1])},
     stats: {sessions: st.sessions, questions: st.questions, correct: st.correct},
     recent: st.recent.slice().reverse().map(e => Object.assign({sid: sid}, e)),
-    wrong: st.wrong.slice(0, 60)
+    wrong: st.wrong.slice(0, 60),
+    acts: (() => { let a = []; try { a = parseJ_(sh.getRange(row, ACT_COL).getValue(), []); } catch (e) {} return (Array.isArray(a) ? a : []).slice().reverse(); })()
   };
 }
 function isPractice_(l) { return l.total > 0; }
@@ -453,11 +655,23 @@ function addPractice_(sid, entry, cliMy) {
       sh.getRange(row, 7, 1, 9).setValues([statsCells_(st).concat([mm.changed ? JSON.stringify(mm.my) : r[MY_COL - 1]])]);   // G~O열
       sh.getRange(row, 4).setValue(new Date());   // 최근 접속
       out.me = meCachePut_(sid, String(r[1]), st);
+      if (entry.rank) rankUpdate_(sh, row, entry);
     } else if (mm.changed) {
       sh.getRange(row, MY_COL).setValue(JSON.stringify(mm.my));
     }
     if (cliMy) out.myPack = myPack_(sid, mm.my);
     return out;
+  });
+}
+function addActivity_(sid, act) {
+  withLock_(() => {
+    const sh = sheet_(SHEET_STUDENTS), row = findStudentRow_(sh, sid);
+    if (!row) fail_('학생 정보를 찾을 수 없어요. 다시 로그인해 주세요.', 'auth');
+    const list = parseJ_(sh.getRange(row, ACT_COL).getValue(), []);
+    const all = (Array.isArray(list) ? list : []).concat([act]).sort((a, b) => a.at < b.at ? -1 : 1).slice(-ACT_KEEP);
+    if (sh.getRange(1, ACT_COL).getValue() !== ACT_HEADER) sh.getRange(1, ACT_COL).setValue(ACT_HEADER).setFontWeight('bold');
+    sh.getRange(row, ACT_COL).setValue(JSON.stringify(all));
+    sh.getRange(row, 4).setValue(new Date());   // 최근 접속
   });
 }
 /* 예전 '기록' 탭(연습 한 번에 한 줄)을 학생 줄에 합치고 탭 이름을 '지난 기록'으로 바꿈 */
@@ -497,20 +711,63 @@ function readSets_() {
   const sh = sheet_(SHEET_SETS), n = sh.getLastRow(); if (n < 2) return [];
   return sh.getRange(2, 1, n - 1, SET_HEADERS.length).getValues().map((r, i) => {
     let words = []; try { words = JSON.parse(String(r[4] || '[]')); } catch (e) {}
-    return {row: i + 2, id: String(r[0]).trim(), name: String(r[1]), order: Number(r[2]) || 0, words: words, updated: iso_(r[6])};
+    const cardOrder = parseJ_(r[7], []);
+    return {row: i + 2, id: String(r[0]).trim(), name: String(r[1]), order: Number(r[2]) || 0, words: words, updated: iso_(r[6]), cardOrder: Array.isArray(cardOrder) ? cardOrder : []};
   }).filter(x => x.id).sort((a, b) => a.order - b.order || a.row - b.row);
 }
-/* 지문 꾸러미: 내용으로 만든 짧은 버전과 함께 보냄. 브라우저가 가진 버전과 같으면 단어는 보내지 않음 */
+/* 지문 꾸러미: 지문과 학생에게 보이는 공지를 내용으로 만든 짧은 버전과 함께 보냄. 브라우저가 가진 버전과 같으면 내용은 보내지 않음 */
 function setsBundle_() {
-  return cached_('c_sets2', () => {
-    const sets = readSets_().map(x => ({id: x.id, name: x.name, words: x.words, updated: x.updated}));
-    const v = Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify(sets), Utilities.Charset.UTF_8)).slice(0, 12);
-    return {v: v, sets: sets};
+  return cached_('c_sets3', () => {
+    const sets = readSets_().map(x => Object.assign({id: x.id, name: x.name, words: x.words, updated: x.updated}, x.cardOrder.length ? {cardOrder: x.cardOrder} : {}));
+    const notices = readNotices_().filter(x => x.show).map(x => ({id: x.id, title: x.title, body: x.body, created: x.created, updated: x.updated}));
+    const v = Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify([sets, notices]), Utilities.Charset.UTF_8)).slice(0, 12);
+    return {v: v, sets: sets, notices: notices};
   });
 }
 function setsFor_(have) {
   const b = setsBundle_();
-  return have && have === b.v ? {v: b.v, same: true} : {v: b.v, sets: b.sets};
+  return have && have === b.v ? {v: b.v, same: true} : {v: b.v, sets: b.sets, notices: b.notices};
+}
+
+/* ---------------- 공지 ---------------- */
+/* '공지' 시트: 한 줄에 공지 하나. '보이기'가 TRUE인 것만 학생 첫 화면에 새 공지부터 보임 */
+function readNotices_() {
+  const sh = sheet_(SHEET_NOTICES), n = sh.getLastRow(); if (n < 2) return [];
+  return sh.getRange(2, 1, n - 1, NOTICE_HEADERS.length).getValues().map((r, i) => ({
+    row: i + 2, id: String(r[0]).trim(), title: String(r[1]), body: String(r[2]), show: r[3] === true || String(r[3]).toUpperCase() === 'TRUE',
+    created: iso_(r[4]), updated: iso_(r[5])
+  })).filter(x => x.id).sort((a, b) => (b.created > a.created ? 1 : b.created < a.created ? -1 : b.row - a.row));
+}
+const noticesAdmin_ = () => readNotices_().map(x => ({id: x.id, title: x.title, body: x.body, show: x.show, created: x.created, updated: x.updated}));
+function adminNotices_(req) {
+  checkToken_(req.token, 'a');
+  return {ok: true, notices: noticesAdmin_()};
+}
+function adminNoticeSave_(req) {
+  checkToken_(req.token, 'a');
+  const title = String(req.title || '').trim().replace(/\s+/g, ' ');
+  const body = String(req.body || '').replace(/\r\n?/g, '\n').trim();
+  if (!title || title.length > 60) fail_('공지 제목을 1~60자로 써 주세요.');
+  if (body.length > 2000) fail_('공지 내용은 2000자까지 쓸 수 있어요.');
+  const show = req.show !== false;
+  return withLock_(() => {
+    const sh = sheet_(SHEET_NOTICES), now = new Date();
+    const cur = req.id ? readNotices_().find(x => x.id === String(req.id)) : null;
+    if (req.id && !cur) fail_('그 공지를 찾을 수 없어요. 새로고침해 주세요.');
+    if (cur) sh.getRange(cur.row, 2, 1, 3).setValues([[asText_(title), asText_(body), show]]), sh.getRange(cur.row, 6).setValue(now);
+    else sh.appendRow(['n' + Utilities.getUuid().replace(/-/g, '').slice(0, 7), asText_(title), asText_(body), show, now, now]);
+    forget_('c_sets3');
+    return {ok: true, notices: noticesAdmin_(), setsPack: setsFor_('')};
+  });
+}
+function adminNoticeDelete_(req) {
+  checkToken_(req.token, 'a');
+  return withLock_(() => {
+    const cur = readNotices_().find(x => x.id === String(req.id || ''));
+    if (cur) sheet_(SHEET_NOTICES).deleteRow(cur.row);
+    forget_('c_sets3');
+    return {ok: true, notices: noticesAdmin_(), setsPack: setsFor_('')};
+  });
 }
 function sets_(req) {
   return Object.assign({ok: true}, setsFor_(req && req.v));
@@ -540,14 +797,27 @@ function adminSetSave_(req) {
     if (cur) {
       sh.getRange(cur.row, 2, 1, 4).setValues([[asText_(name), cur.order, words.length, json]]);
       sh.getRange(cur.row, 7).setValue(now);
-      forget_('c_sets2');
+      forget_('c_sets3');
       return {ok: true, id: cur.id, setsPack: setsFor_('')};
     }
     const id = 's' + Utilities.getUuid().replace(/-/g, '').slice(0, 7);
     const order = list.reduce((m, x) => Math.max(m, x.order), 0) + 1;
     sh.appendRow([id, asText_(name), order, words.length, json, now, now]);
-    forget_('c_sets2');
+    forget_('c_sets3');
     return {ok: true, id: id, setsPack: setsFor_('')};
+  });
+}
+/* 수업용 카드 넘기기: 선생님이 정한 단어 순서(영어 단어 목록)를 '지문' 시트 H열에 저장. 학생 연습의 순서는 바뀌지 않음 */
+function adminCardOrderSave_(req) {
+  checkToken_(req.token, 'a');
+  const order = (Array.isArray(req.order) ? req.order : []).slice(0, 500).map(x => String(x).slice(0, 80)).filter(Boolean);
+  return withLock_(() => {
+    const sh = sheet_(SHEET_SETS), cur = readSets_().find(x => x.id === String(req.id || ''));
+    if (!cur) fail_('그 지문을 찾을 수 없어요. 새로고침해 주세요.');
+    if (sh.getRange(1, 8).getValue() !== SET_HEADERS[7]) sh.getRange(1, 8).setValue(SET_HEADERS[7]).setFontWeight('bold');
+    sh.getRange(cur.row, 8).setValue(order.length ? asText_(JSON.stringify(order)) : '');
+    forget_('c_sets3');
+    return {ok: true, setsPack: setsFor_('')};
   });
 }
 function adminSetDelete_(req) {
@@ -556,7 +826,7 @@ function adminSetDelete_(req) {
     const cur = readSets_().find(x => x.id === String(req.id || ''));
     if (!cur) fail_('그 지문을 찾을 수 없어요.');
     sheet_(SHEET_SETS).deleteRow(cur.row);
-    forget_('c_sets2');
+    forget_('c_sets3');
     return {ok: true, setsPack: setsFor_('')};
   });
 }
@@ -566,7 +836,7 @@ function adminSetOrder_(req) {
   return withLock_(() => {
     const sh = sheet_(SHEET_SETS);
     readSets_().forEach(x => { const k = ids.indexOf(x.id); sh.getRange(x.row, 3).setValue(k < 0 ? ids.length + x.order : k + 1); });
-    forget_('c_sets2');
+    forget_('c_sets3');
     return {ok: true, setsPack: setsFor_('')};
   });
 }
@@ -656,34 +926,87 @@ function teamOf_(token) {
   return {cls: id.slice(0, k), team: id.slice(k + 1)};
 }
 
-/* ---------------- 레이스 (선생님이 지문을 묶어 만듦) ---------------- */
+/* ---------------- 레이스 (선생님이 만듦: 모둠 레이스 또는 개인 레이스, 단어 레이스 또는 Quiz) ----------------
+   '상태' 칸: 반별로 열기·마감 {"open":{"*":"진행","2학년 3반":"마감"},"del":false}. 예전 글자('진행' 등)도 읽음.
+   '문제(JSON)' 칸: Quiz의 문제 [{type:'choice'|'text', passage, q, options, answer, exp}] */
 function readRaces_() {
   const sh = sheet_(SHEET_RACES), n = sh.getLastRow(); if (n < 2) return [];
   return sh.getRange(2, 1, n - 1, RACE_HEADERS.length).getValues().map((r, i) => {
     const j = v => { try { return JSON.parse(String(v || '')); } catch (e) { return null; } };
-    return {row: i + 2, id: String(r[0]).trim(), name: String(r[1]), classes: j(r[2]) || [], sources: j(r[3]) || [], settings: j(r[4]) || {}, status: String(r[5] || '준비'), created: iso_(r[6]), updated: iso_(r[7])};
+    const settings = j(r[4]) || {};
+    if (settings.who !== 'student') settings.who = 'team';
+    return {row: i + 2, id: String(r[0]).trim(), name: String(r[1]), classes: j(r[2]) || [], sources: j(r[3]) || [], settings: settings,
+      state: raceState_(r[5]), created: iso_(r[6]), updated: iso_(r[7]), questions: j(r[8]) || []};
   }).filter(x => x.id);
 }
 const RACE_STATUS = ['준비', '진행', '마감'];
+function raceState_(v) {
+  const s = String(v == null ? '' : v).trim();
+  if (s[0] === '{') { try { const o = JSON.parse(s); return {open: o.open || {}, del: !!o.del}; } catch (e) {} }
+  return {open: {'*': RACE_STATUS.indexOf(s) >= 0 ? s : '준비'}, del: false};
+}
+/* 한 반에서 이 레이스가 지금 어떤 상태인지: 그 반에 따로 정한 것이 먼저, 없으면 전체 반 설정 */
+function raceStatusFor_(race, cls) { return race.state.open[cls] || race.state.open['*'] || '준비'; }
+/* 학번에서 반을 계산: 21201 → 2학년 12반 (학년 1자리 + 반 2자리 + 번호 2자리). 맞지 않으면 '기타' */
+function sidClass_(sid) {
+  const m = /^(\d)(\d{2})(\d{2})$/.exec(String(sid || ''));
+  return m && Number(m[2]) > 0 ? `${m[1]}학년 ${Number(m[2])}반` : '기타';
+}
+function studentClasses_() {
+  const by = {};
+  readStudents_().forEach(s => { const c = sidClass_(s.sid); (by[c] = by[c] || []).push({sid: s.sid, name: s.name}); });
+  return Object.keys(by).sort((a, b) => a === '기타' ? 1 : b === '기타' ? -1 : a.localeCompare(b, 'ko', {numeric: true})).map(c => ({name: c, students: by[c]}));
+}
+function cleanQuestion_(q) {
+  const str = (v, n) => String(v == null ? '' : v).replace(/\r/g, '').trim().slice(0, n);
+  const out = {type: q && q.type === 'text' ? 'text' : 'choice', passage: str(q && q.passage, 6000), q: str(q && q.q, 2000), exp: str(q && q.exp, 2000)};
+  if (!out.q) return null;
+  if (q && /^q[0-9a-f]{8}$/.test(String(q.img || ''))) out.img = String(q.img);   // 지문 그림 ('퀴즈 이미지' 시트의 ID)
+  if (out.type === 'choice') {
+    out.options = (Array.isArray(q.options) ? q.options : []).map(o => str(o, 400)).filter(Boolean).slice(0, 6);
+    if (out.options.length < 2) return null;
+    out.answer = Math.floor(Number(q.answer));
+    if (!(out.answer >= 0 && out.answer < out.options.length)) return null;
+  } else {
+    out.answer = (Array.isArray(q.answer) ? q.answer : [q.answer]).map(a => str(a, 200)).filter(Boolean).slice(0, 10);
+    if (!out.answer.length) return null;
+  }
+  return out;
+}
 function cleanRace_(req) {
   const name = String(req.name || '').trim().replace(/\s+/g, ' ');
   if (!name || name.length > 40) fail_('레이스 이름을 1~40자로 써 주세요.');
-  const sources = (Array.isArray(req.sources) ? req.sources : []).map(String).filter(s => /^[A-Za-z0-9-]{1,30}$/.test(s)).slice(0, 40);
-  if (!sources.length) fail_('레이스에 쓸 지문을 하나 이상 골라 주세요.');
-  let classes = (Array.isArray(req.classes) ? req.classes : []).map(c => String(c).trim()).filter(Boolean).slice(0, 40);
+  const s = req.settings || {};
+  const mode = ['time', 'match', 'spell', 'quiz'].indexOf(s.mode) >= 0 ? s.mode : 'time';
+  let sources = [], questions = [];
+  if (mode === 'quiz') {
+    const raw = Array.isArray(req.questions) ? req.questions : [];
+    questions = raw.map(cleanQuestion_).filter(Boolean).slice(0, 200);
+    if (!questions.length) fail_('Quiz 문제를 하나 이상 넣어 주세요. 문제마다 정답이 있어야 해요.');
+    if (questions.length < raw.length) fail_(`정답이나 보기가 빠진 문제가 ${raw.length - questions.length}개 있어요. 확인해 주세요.`);
+    if (JSON.stringify(questions).length > 45000) fail_('문제가 너무 길어요. 지문을 줄이거나 레이스를 둘로 나눠 주세요.');
+  } else {
+    sources = (Array.isArray(req.sources) ? req.sources : []).map(String).filter(x => /^[A-Za-z0-9-]{1,30}$/.test(x)).slice(0, 40);
+    if (!sources.length) fail_('레이스에 쓸 지문을 하나 이상 골라 주세요.');
+  }
+  let classes = (Array.isArray(req.classes) ? req.classes : []).map(c => String(c).trim()).filter(Boolean).slice(0, 60);
   if (classes.indexOf('*') >= 0) classes = ['*'];   // 전체 반 (나중에 추가한 반도 포함)
   if (!classes.length) fail_('레이스에 참여할 반을 하나 이상 골라 주세요.');
-  const s = req.settings || {};
-  const mode = ['time', 'match', 'spell'].indexOf(s.mode) >= 0 ? s.mode : 'time';
   const settings = {
     mode: mode,
+    who: s.who === 'student' ? 'student' : 'team',
+    multi: !!s.multi,
+    shuffle: !!s.shuffle,
+    // Quiz 채점 방식: 'speed' 빠르기(맞혀야 넘어가고 시간으로 순위) / 'acc' 정확도(한 번씩 답하고 제한 시간 안에 정답률로 순위)
+    scoring: mode === 'quiz' && s.scoring === 'acc' ? 'acc' : 'speed',
+    limit: mode === 'quiz' && s.scoring === 'acc' ? Math.max(0, Math.min(180, Math.floor(Number(s.limit) || 0))) : 0,   // 제한 시간(분), 0이면 없음
     count: Math.max(0, Math.min(300, Math.floor(Number(s.count) || 0))),
     penalty: Math.max(0, Math.min(30, Math.floor(Number(s.penalty) || 0))),
     rel: !!s.rel,
     live: !!s.live,
     showRank: !!s.showRank
   };
-  return {name: name, sources: sources, classes: classes, settings: settings};
+  return {name: name, sources: sources, classes: classes, settings: settings, questions: questions};
 }
 function adminRaceSave_(req) {
   checkToken_(req.token, 'a');
@@ -694,39 +1017,110 @@ function adminRaceSave_(req) {
     if (req.id && !cur) fail_('그 레이스를 찾을 수 없어요. 새로고침해 주세요.');
     const vals = [asText_(r.name), JSON.stringify(r.classes), JSON.stringify(r.sources), JSON.stringify(r.settings)];
     forget_('c_races');
-    if (cur) { sh.getRange(cur.row, 2, 1, 4).setValues([vals]); sh.getRange(cur.row, 8).setValue(now); return {ok: true, id: cur.id}; }
+    if (cur) {
+      sh.getRange(cur.row, 2, 1, 4).setValues([vals]);
+      sh.getRange(cur.row, 8, 1, 2).setValues([[now, JSON.stringify(r.questions)]]);
+      try { qimgPrune_(); } catch (e) {}
+      return {ok: true, id: cur.id};
+    }
     const id = 'r' + Utilities.getUuid().replace(/-/g, '').slice(0, 7);
-    sh.appendRow([id].concat(vals, ['준비', now, now]));
+    sh.appendRow([id].concat(vals, [JSON.stringify({open: {'*': '준비'}, del: false}), now, now, JSON.stringify(r.questions)]));
     return {ok: true, id: id};
   });
 }
+function writeState_(race) {
+  sheet_(SHEET_RACES).getRange(race.row, 6).setValue(JSON.stringify(race.state));
+  forget_('c_races');
+}
+/* 열기·마감: cls가 '*'이면 모든 반을 한꺼번에, 반 이름이면 그 반만 */
 function adminRaceStatus_(req) {
   checkToken_(req.token, 'a');
   const st = String(req.status || '');
   if (RACE_STATUS.indexOf(st) < 0) fail_('알 수 없는 상태예요.');
+  const cls = String(req.cls || '*').trim() || '*';
   return withLock_(() => {
     const cur = readRaces_().find(x => x.id === String(req.id || ''));
     if (!cur) fail_('그 레이스를 찾을 수 없어요.');
-    sheet_(SHEET_RACES).getRange(cur.row, 6).setValue(st);
-    forget_('c_races');
+    if (cls === '*') cur.state.open = {'*': st}; else cur.state.open[cls] = st;
+    writeState_(cur);
+    return {ok: true, state: cur.state};
+  });
+}
+/* 삭제: soft는 학생·모둠 화면에서만 숨김(선생님 화면엔 남음), restore는 되살리기, hard는 완전 삭제(기록은 시트에 남음) */
+function adminRaceDelete_(req) {
+  checkToken_(req.token, 'a');
+  const how = ['soft', 'restore', 'hard'].indexOf(req.how) >= 0 ? req.how : 'soft';
+  return withLock_(() => {
+    const cur = readRaces_().find(x => x.id === String(req.id || ''));
+    if (!cur) fail_('그 레이스를 찾을 수 없어요.');
+    if (how === 'hard') { sheet_(SHEET_RACES).deleteRow(cur.row); forget_('c_races'); qimgPrune_(); }
+    else { cur.state.del = how === 'soft'; writeState_(cur); }
     return {ok: true};
   });
 }
-function adminRaceDelete_(req) {
+/* 퀴즈 지문 그림: 숨긴 '퀴즈 이미지' 시트에 한 줄에 그림 하나 (사진 파일을 글자로 바꾼 값을 여러 칸에 나눠 저장).
+   구글 드라이브는 쓰지 않음. 레이스 문제에는 그림 ID만 들어가고, 학생 화면은 그 ID로 그림을 받아 감 */
+const SHEET_QIMG = '퀴즈 이미지';
+const QIMG_HEADERS = ['ID', '만든 시각', '종류', '조각 수', '그림 데이터 (사이트가 쓰는 칸이니 고치지 마세요)'];
+const QIMG_CHUNK = 45000, QIMG_MAX = 900000;
+function qimgSheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sh = ss.getSheetByName(SHEET_QIMG);
+  if (!sh) { sh = ensureSheet_(ss, SHEET_QIMG, QIMG_HEADERS); try { sh.hideSheet(); } catch (e) {} }
+  return sh;
+}
+function adminQImgSave_(req) {
   checkToken_(req.token, 'a');
+  const mime = /^image\/(png|jpeg)$/.test(String(req.mime)) ? String(req.mime) : '';
+  if (!mime) fail_('PNG나 JPG 그림만 넣을 수 있어요.');
+  const data = String(req.data || '');
+  if (!data || !/^[A-Za-z0-9+/]+=*$/.test(data)) fail_('그림 형식이 올바르지 않아요.');
+  if (data.length > QIMG_MAX) fail_('그림이 너무 커요. 더 작게 잘라서 넣어 주세요.');
+  const parts = []; for (let i = 0; i < data.length; i += QIMG_CHUNK) parts.push('~' + data.slice(i, i + QIMG_CHUNK));   // '~': 시트가 '+', '=' 로 시작하는 값을 수식으로 읽지 않게
+  const id = 'q' + Utilities.getUuid().replace(/-/g, '').slice(0, 8);
   return withLock_(() => {
-    const cur = readRaces_().find(x => x.id === String(req.id || ''));
-    if (!cur) fail_('그 레이스를 찾을 수 없어요.');
-    sheet_(SHEET_RACES).deleteRow(cur.row);
-    forget_('c_races');
-    return {ok: true};
+    const sh = qimgSheet_();
+    sh.appendRow([id, new Date(), mime, parts.length].concat(parts));
+    return {ok: true, id: id};
   });
+}
+function qimg_(req) {
+  const id = String(req.id || '');
+  if (!/^q[0-9a-f]{8}$/.test(id)) fail_('그림을 찾을 수 없어요.');
+  const v = cached_('c_qimg_' + id, () => {
+    const sh = qimgSheet_(), n = sh.getLastRow(); if (n < 2) return null;
+    const ids = sh.getRange(2, 1, n - 1, 1).getValues();
+    for (let i = 0; i < ids.length; i++) if (String(ids[i][0]).trim() === id) {
+      const head = sh.getRange(i + 2, 1, 1, 4).getValues()[0], k = Number(head[3]) || 0;
+      const data = k ? sh.getRange(i + 2, 5, 1, k).getValues()[0].map(x => String(x).replace(/^~/, '')).join('') : '';
+      return {mime: String(head[2]), data: data};
+    }
+    return null;
+  });
+  if (!v || !v.data) fail_('그림을 찾을 수 없어요.');
+  return {ok: true, mime: v.mime, data: v.data};
+}
+/* 어느 레이스에도 쓰이지 않는 그림은 지움 (방금 넣고 아직 저장 전인 그림은 하루 동안 남겨 둠) */
+function qimgPrune_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet(), sh = ss.getSheetByName(SHEET_QIMG); if (!sh) return;
+  const n = sh.getLastRow(); if (n < 2) return;
+  const used = {}; readRaces_().forEach(x => (x.questions || []).forEach(q => { if (q && q.img) used[q.img] = 1; }));
+  const rows = sh.getRange(2, 1, n - 1, 2).getValues(), old = Date.now() - 24 * 3600 * 1000;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const at = rows[i][1] instanceof Date ? rows[i][1].getTime() : Date.parse(rows[i][1]) || 0;
+    if (!used[String(rows[i][0]).trim()] && at < old) sh.deleteRow(i + 2);
+  }
+}
+function raceSummary_(x) {
+  return {id: x.id, name: x.name, classes: x.classes, sources: x.sources, settings: x.settings, state: x.state, questions: x.questions};
 }
 function adminRaces_(req) {
   checkToken_(req.token, 'a');
   const logs = readRaceLogs_();
-  return {ok: true, setsPack: setsFor_(req.v), archive: archiveInfo_(), classes: readTeams_(), races: readRaces_().map(x => ({id: x.id, name: x.name, classes: x.classes, sources: x.sources, settings: x.settings, status: x.status,
-    done: logs.filter(l => l.race === x.id && l.status === '완료').length, running: logs.filter(l => l.race === x.id && l.status === '진행 중').length}))};
+  const people = (x, st, ok) => { const s = {}; logs.forEach(l => { if (l.race === x.id && l.status === st && (!ok || ok(l))) s[l.cls + '\n' + l.team] = 1; }); return Object.keys(s).length; };
+  const open = x => l => raceStatusFor_(x, l.cls) === '진행';   // 달리는 중: 그 반이 아직 열려 있을 때만. 마감된 반은 '마감 전에 못 끝냄'
+  return {ok: true, setsPack: setsFor_(req.v), archive: archiveInfo_(), classes: readTeams_(), studentClasses: studentClasses_().map(c => ({name: c.name, n: c.students.length})),
+    races: readRaces_().map(x => Object.assign(raceSummary_(x), {done: people(x, '완료'), running: people(x, '진행 중', open(x)), stopped: people(x, '진행 중', l => !open(x)(l))}))};
 }
 
 /* ---------------- 레이스 기록 ---------------- */
@@ -735,46 +1129,85 @@ function readRaceLogs_() {
   return sh.getRange(2, 1, n - 1, RACELOG_HEADERS.length).getValues().map((r, i) => ({
     row: i + 2, started: r[0] instanceof Date ? r[0].getTime() : Date.parse(r[0]) || 0, race: String(r[1]).trim(), raceName: String(r[2]), cls: String(r[3]).trim(), team: String(r[4]).trim(),
     status: String(r[5]), done: Number(r[6]) || 0, total: Number(r[7]) || 0, seconds: r[8] === '' ? null : Number(r[8]), penalty: Number(r[9]) || 0, wrong: Number(r[10]) || 0,
-    wrongWords: String(r[11] || ''), updated: iso_(r[12])
+    wrongWords: String(r[11] || ''), updated: iso_(r[12]), answers: String(r[13] || '')
   })).filter(l => l.race);
 }
 const raceHasClass_ = (race, cls) => race.classes.indexOf('*') >= 0 || race.classes.indexOf(cls) >= 0;
+/* 레이스에 나가는 쪽: 모둠(모둠 입장 토큰) 또는 학생(로그인 토큰). 기록 탭에는 반과 '모둠' 칸에 모둠 이름 또는 '학번 이름'이 들어감 */
+function participant_(token) {
+  const kind = String(token || '').split('.')[0];
+  if (kind === 't') { const t = teamOf_(token); return {who: 'team', cls: t.cls, team: t.team}; }
+  const sid = checkToken_(token, 's');
+  const c = stuCacheGet_(sid), name = c ? c.name : (stuFromSheet_(sid) || {}).name;
+  if (name === undefined) fail_('학생 정보를 찾을 수 없어요. 다시 로그인해 주세요.', 'auth');
+  return {who: 'student', cls: sidClass_(sid), team: sid + ' ' + name, sid: sid};
+}
 function openRaceFor_(raceId, who) {
   const race = racesCached_().find(x => x.id === String(raceId || ''));
-  if (!race || !raceHasClass_(race, who.cls)) fail_('참여할 수 없는 레이스예요.');
+  if (!race || race.state.del || race.settings.who !== who.who || !raceHasClass_(race, who.cls)) fail_('참여할 수 없는 레이스예요.');
   return race;
 }
-function racesCached_() { return cached_('c_races', () => readRaces_().map(r => ({id: r.id, name: r.name, classes: r.classes, sources: r.sources, settings: r.settings, status: r.status}))); }
-function races_(req) {
-  const who = teamOf_(req.token);
+function racesCached_() { return cached_('c_races', () => readRaces_().map(raceSummary_)); }
+/* 어느 기록이 더 좋은가: 빠르기 레이스는 시간이 짧은 쪽, 정확도 Quiz는 맞힌 수가 많은 쪽(같으면 시간이 짧은 쪽) */
+const isAcc_ = race => race && race.settings && race.settings.scoring === 'acc';
+function better_(race, a, b) {
+  if (isAcc_(race)) return a.done > b.done || (a.done === b.done && a.seconds < b.seconds);
+  return a.seconds < b.seconds;
+}
+/* 한 사람(모둠)의 기록 요약: 가장 최근 도전과 가장 좋은 기록 */
+function mineOf_(logs, race, who) {
+  const rows = logs.filter(l => l.race === race.id && l.cls === who.cls && l.team === who.team);
+  if (!rows.length) return null;
+  const last = rows[rows.length - 1], done = rows.filter(l => l.status === '완료' && l.seconds !== null);
+  const best = done.length ? done.reduce((a, b) => (better_(race, b, a) ? b : a)) : null;
+  const lastDone = done[done.length - 1];   // 다시 보기: 마지막으로 끝낸 도전의 답과 틀린 단어
+  return {status: last.status, seconds: last.seconds, done: last.done, total: last.total, wrong: last.wrong, tries: rows.length,
+    best: best ? best.seconds : null, bestDone: best ? best.done : null, bestTotal: best ? best.total : null, finished: done.length,
+    answers: lastDone ? parseJ_(lastDone.answers, null) : null, wrongWords: lastDone && lastDone.wrongWords ? lastDone.wrongWords.split(' ; ') : []};
+}
+function raceListFor_(who) {
   const logs = readRaceLogs_().filter(l => l.cls === who.cls && l.team === who.team);
-  const list = racesCached_().filter(r => raceHasClass_(r, who.cls) && r.status !== '준비').map(r => {
-    const mine = logs.find(l => l.race === r.id);
-    return {id: r.id, name: r.name, sources: r.sources, settings: r.settings, status: r.status,
-      mine: mine ? {status: mine.status, seconds: mine.seconds, done: mine.done, total: mine.total, wrong: mine.wrong} : null};
-  });
-  return {ok: true, team: who, races: list, setsPack: setsFor_(req.v)};
+  return racesCached_().filter(r => !r.state.del && r.settings.who === who.who && raceHasClass_(r, who.cls)).map(r => {
+    const status = raceStatusFor_(r, who.cls);
+    return {id: r.id, name: r.name, sources: r.sources, settings: r.settings, status: status, questions: r.questions, mine: mineOf_(logs, r, who)};
+  }).filter(r => r.status !== '준비');
+}
+function races_(req) {
+  if (String(req.token || '').split('.')[0] === 'a') {   // 관리자 화면의 '학생 화면': 선생님이 고른 반 학생에게 보이는 개인 레이스 (기록은 남지 않음)
+    checkToken_(req.token, 'a');
+    const list = cached_('c_stucls2', () => studentClasses_().map(c => ({name: c.name, students: c.students})));
+    const view = req.sid ? viewStudent_(req.sid) : null;   // 반별 화면에서 고른 학생: 그 학생의 레이스 기록(완료·최고 기록)이 보이게 함
+    const cls = view ? view.cls : String(req.cls || '').slice(0, 40);
+    const who = view ? {who: 'student', cls: cls, team: view.sid + ' ' + view.name} : {who: 'student', cls: cls, team: '#teacher'};
+    return {ok: true, team: null, cls: cls, classes: list.map(c => c.name), students: list, races: cls ? raceListFor_(who) : [], setsPack: setsFor_(req.v)};
+  }
+  const who = participant_(req.token);
+  return {ok: true, team: who.who === 'team' ? {cls: who.cls, team: who.team} : null, cls: who.cls, races: raceListFor_(who), setsPack: setsFor_(req.v)};
 }
 function raceStart_(req) {
-  const who = teamOf_(req.token);
+  const who = participant_(req.token);
   return withLock_(() => {
     const race = openRaceFor_(req.race, who);
-    const mine = readRaceLogs_().find(l => l.race === race.id && l.cls === who.cls && l.team === who.team);
-    if (mine && mine.status === '완료') fail_('이 레이스는 이미 끝냈어요. 다시 하려면 선생님께 말씀드리세요.', 'race_done');
-    if (mine) {   // 새로고침·화면 꺼짐 뒤 이어 하기
-      return {ok: true, resumed: true, elapsed: (Date.now() - mine.started) / 1000, done: mine.done, wrong: mine.wrong, penalty: mine.penalty};
+    const rows = readRaceLogs_().filter(l => l.race === race.id && l.cls === who.cls && l.team === who.team);
+    const last = rows[rows.length - 1];
+    if (last && last.status !== '완료') {   // 새로고침·화면 꺼짐 뒤 이어 하기
+      return {ok: true, resumed: true, elapsed: (Date.now() - last.started) / 1000, done: last.done, wrong: last.wrong, penalty: last.penalty};
     }
-    if (race.status !== '진행') fail_(race.status === '마감' ? '마감된 레이스예요.' : '아직 열리지 않은 레이스예요.');
+    if (last && !race.settings.multi) fail_('이 레이스는 이미 끝냈어요. 다시 하려면 선생님께 말씀드리세요.', 'race_done');
+    const status = raceStatusFor_(race, who.cls);
+    if (status !== '진행') fail_(status === '마감' ? '마감된 레이스예요.' : '아직 열리지 않은 레이스예요.');
     const total = Math.max(0, Math.floor(Number(req.total) || 0));
     const now = new Date();
     sheet_(SHEET_RACELOG).appendRow([now, race.id, asText_(race.name), asText_(who.cls), asText_(who.team), '진행 중', 0, total, '', 0, 0, '', now]);
-    return {ok: true, resumed: false, elapsed: 0, done: 0, wrong: 0, penalty: 0};
+    return {ok: true, resumed: false, elapsed: 0, done: 0, wrong: 0, penalty: 0, tries: rows.length + 1};
   });
 }
 function raceUpdate_(req, finish) {
-  const who = teamOf_(req.token);
+  const who = participant_(req.token);
   return withLock_(() => {
-    const mine = readRaceLogs_().find(l => l.race === String(req.race || '') && l.cls === who.cls && l.team === who.team);
+    const logs = readRaceLogs_();
+    const rows = logs.filter(l => l.race === String(req.race || '') && l.cls === who.cls && l.team === who.team);
+    const mine = rows[rows.length - 1];
     if (!mine) fail_('레이스 기록을 찾을 수 없어요. 처음부터 다시 시작해 주세요.');
     if (mine.status === '완료') return {ok: true, already: true};
     const done = Math.max(0, Math.floor(Number(req.done) || 0)), wrong = Math.max(0, Math.floor(Number(req.wrong) || 0));
@@ -784,15 +1217,25 @@ function raceUpdate_(req, finish) {
     sh.getRange(mine.row, 10, 1, 2).setValues([[penalty, wrong]]);
     sh.getRange(mine.row, 13).setValue(new Date());
     if (finish) {
-      // 시간은 서버가 잰다: 시작부터 지금까지 + 벌점
-      const seconds = Math.round(((Date.now() - mine.started) / 1000 + penalty) * 10) / 10;
+      // 시간은 서버가 잰다: 시작부터 지금까지 + 벌점. 정확도 Quiz는 벌점 없이, 제한 시간을 넘지 않게
+      const race = readRaces_().find(x => x.id === mine.race);
+      let seconds = Math.round(((Date.now() - mine.started) / 1000 + (isAcc_(race) ? 0 : penalty)) * 10) / 10;
+      if (isAcc_(race) && race.settings.limit) seconds = Math.min(seconds, race.settings.limit * 60);
       const words = (Array.isArray(req.wrongWords) ? req.wrongWords : []).slice(0, 100).map(w => String(w).slice(0, 60)).join(' ; ');
       sh.getRange(mine.row, 6).setValue('완료');
       sh.getRange(mine.row, 9).setValue(seconds);
       sh.getRange(mine.row, 12).setValue(asText_(words));
-      const same = readRaceLogs_().filter(l => l.race === mine.race && l.cls === who.cls && l.status === '완료' && l.seconds !== null);
-      const rank = same.filter(l => l.seconds < seconds).length + 1;
-      return {ok: true, seconds: seconds, rank: rank, of: same.length};
+      if (Array.isArray(req.answers)) {   // Quiz: 문제마다 {a: 고른 보기 번호 또는 쓴 답, r: ok|wrong|skip|blank}
+        const ans = req.answers.slice(0, 200).map(x => x && typeof x === 'object' ? {a: typeof x.a === 'number' ? x.a : x.a == null ? null : String(x.a).slice(0, 100), r: String(x.r || '').slice(0, 6)} : null);
+        if (sh.getRange(1, 14).getValue() !== RACELOG_HEADERS[13]) sh.getRange(1, 14).setValue(RACELOG_HEADERS[13]).setFontWeight('bold');
+        sh.getRange(mine.row, 14).setValue(JSON.stringify(ans));
+      }
+      // 반 순위: 사람(모둠)마다 가장 좋은 기록으로
+      const best = {}, me = {done: done, seconds: seconds};
+      logs.forEach(l => { if (l.race === mine.race && l.cls === who.cls && l.status === '완료' && l.seconds !== null && l.row !== mine.row) { const k = l.team; if (!(k in best) || better_(race, l, best[k])) best[k] = l; } });
+      if (!(who.team in best) || better_(race, me, best[who.team])) best[who.team] = me;
+      const vals = Object.keys(best).map(k => best[k]), myBest = best[who.team];
+      return {ok: true, seconds: seconds, best: myBest.seconds, bestDone: myBest.done, rank: vals.filter(v => better_(race, v, myBest)).length + 1, of: vals.length};
     }
     return {ok: true};
   });
@@ -803,19 +1246,23 @@ function adminBoard_(req) {
   checkToken_(req.token, 'a');
   const race = readRaces_().find(x => x.id === String(req.race || ''));
   if (!race) fail_('그 레이스를 찾을 수 없어요.');
-  const cls = String(req.cls || '');
-  const rows = readRaceLogs_().filter(l => l.race === race.id && (!cls || l.cls === cls)).map(l => ({
+  const rows = readRaceLogs_().filter(l => l.race === race.id).map(l => ({
     cls: l.cls, team: l.team, status: l.status, done: l.done, total: l.total, seconds: l.seconds, penalty: l.penalty, wrong: l.wrong,
     wrongWords: l.wrongWords ? l.wrongWords.split(' ; ') : [], elapsed: l.status === '진행 중' ? (Date.now() - l.started) / 1000 + l.penalty : null
   }));
-  return {ok: true, race: {id: race.id, name: race.name, classes: race.classes, sources: race.sources, settings: race.settings, status: race.status}, rows: rows, teams: readTeams_()};
+  const out = {ok: true, race: raceSummary_(race), rows: rows};
+  if (race.settings.who === 'student') out.teams = studentClasses_().map(c => ({name: c.name, teams: c.students.map(s => s.sid + ' ' + s.name)}));
+  else out.teams = readTeams_();
+  return out;
 }
+/* 기록 지우기: 그 모둠(학생)의 이 레이스 기록을 모두 지워 다시 달릴 수 있게 함 */
 function adminRaceReset_(req) {
   checkToken_(req.token, 'a');
   return withLock_(() => {
-    const mine = readRaceLogs_().find(l => l.race === String(req.race || '') && l.cls === String(req.cls || '') && l.team === String(req.team || ''));
-    if (!mine) fail_('지울 기록이 없어요.');
-    sheet_(SHEET_RACELOG).deleteRow(mine.row);
+    const rows = readRaceLogs_().filter(l => l.race === String(req.race || '') && l.cls === String(req.cls || '') && l.team === String(req.team || ''));
+    if (!rows.length) fail_('지울 기록이 없어요.');
+    const sh = sheet_(SHEET_RACELOG);
+    rows.map(l => l.row).sort((a, b) => b - a).forEach(r => sh.deleteRow(r));
     return {ok: true};
   });
 }
@@ -882,7 +1329,7 @@ function adminArchive_(req) {
 /* ---------------- 시트 읽기·쓰기 ---------------- */
 function sheet_(name) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const headers = {[SHEET_STUDENTS]: STUDENT_HEADERS, [SHEET_SETS]: SET_HEADERS, [SHEET_TEAMS]: TEAM_HEADERS, [SHEET_RACES]: RACE_HEADERS, [SHEET_RACELOG]: RACELOG_HEADERS, [SHEET_LOG_OLD]: LOG_HEADERS}[name] || LOG_HEADERS;
+  const headers = {[SHEET_STUDENTS]: STUDENT_HEADERS, [SHEET_SETS]: SET_HEADERS, [SHEET_TEAMS]: TEAM_HEADERS, [SHEET_RACES]: RACE_HEADERS, [SHEET_RACELOG]: RACELOG_HEADERS, [SHEET_NOTICES]: NOTICE_HEADERS, [SHEET_LOG_OLD]: LOG_HEADERS}[name] || LOG_HEADERS;
   return ss.getSheetByName(name) || ensureSheet_(ss, name, headers);
 }
 function findStudentRow_(sh, sid) {
@@ -926,7 +1373,9 @@ function checkToken_(token, kind) {
   const body = p.slice(0, 3).join('.');
   if (sign_(body) !== p[3] || Number(p[2]) < Date.now()) fail_('로그인이 만료되었어요. 다시 로그인해 주세요.', 'auth');
   let id = p[1]; while (id.length % 4) id += '=';
-  return Utilities.newBlob(Utilities.base64DecodeWebSafe(id)).getDataAsString('UTF-8');
+  const who = Utilities.newBlob(Utilities.base64DecodeWebSafe(id)).getDataAsString('UTF-8');
+  if (kind === 's' && !regAllowed_(who)) fail_('사용 권한이 없는 학번입니다.', 'auth');   // 학번 목록에서 빠진 학생은 로그인해 있어도 쓸 수 없음
+  return who;
 }
 function cleanSid_(v) {
   const s = String(v == null ? '' : v).trim();
